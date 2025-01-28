@@ -2,68 +2,94 @@ const express = require('express');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const line = require('@line/bot-sdk');
 const dotenv = require('dotenv').config();
+const fs = require('fs');
+const path = require('path');
+const similarity = require('string-similarity');
+const wordcut = require('wordcut');
+
+// Initialize wordcut for Thai tokenization
+wordcut.init();
 
 const app = express();
-const port = process.env.PORT || 3000;
+const port = process.env.PORT || 3001; // Changed port to 3001
+
+// Parse JSON request bodies
+app.use(express.json());
 
 // LINE Messaging API configuration
 const lineConfig = {
     channelAccessToken: 'OdrvozLDBJZqEhxrqLC0UXBEVWVMm2mgAfdSU9JTxyi7ZQSVCKaXfGKZOHJYddTtISzpkTHblPr0wcvkLmB0EGvKLeXo9N8FtnF69Tm/zcSQ0JS2J4tkvVCo+DXUKPfssG0mhA1I56BFKChrg2NRBgdB04t89/1O/w1cDnyilFU=',
     channelSecret: '8ff5f11991be728f63d5f91bd4b56bbf',
 };
-
 const lineClient = new line.Client(lineConfig);
 
 // Chatbot Configuration
 const MODEL_NAME = "gemini-1.5-flash-latest";
 const API_KEY = 'AIzaSyAKmKkNByBZAx8uMune4wloIR8ifvQ3zXg';
 
-// Use LINE middleware only (remove express.json())
-app.use(line.middleware(lineConfig));
+// Load data.json
+const dataPath = path.join(__dirname, 'data/data.json');
+const rawData = fs.readFileSync(dataPath);
+const questionsData = JSON.parse(rawData);
 
-// Debugging middleware to log incoming requests
-app.use((req, res, next) => {
-    console.log('Incoming request body:', JSON.stringify(req.body, null, 2)); // Log full request body
-    next();
-});
+// Load info.json
+const infoPath = path.join(__dirname, 'data/info.json');
+const rawInfo = fs.readFileSync(infoPath);
+const additionalInfo = JSON.parse(rawInfo);
 
-// Root route for testing
-app.get('/', (req, res) => {
-    res.send('LINE Bot is running!');
-});
+// Tokenization function for Thai text
+function tokenizeThaiText(text) {
+    return wordcut.cut(text); // Tokenize Thai text into spaced words
+}
 
-// Add this route to test LINE messaging
-app.get('/test-line', (req, res) => {
-    const userId = 'U4e4d9cd17e49dd7a22f8fd4e77d249a7'; // Replace with your user ID
-    lineClient.pushMessage(userId, { type: 'text', text: 'Test message from LINE API' })
-        .then(() => res.send('Message sent!'))
-        .catch(error => {
-            console.error('LINE API error:', error);
-            res.status(500).send('Failed to send message');
-        });
-});
-
-// Function to format bot response based on persona
+// Function to format bot response
 function formatBotResponse(responseText, userId) {
-    // Add emojis and friendly tone
     let formattedResponse = responseText.replace(/น้องอะตอมยูงทอง/g, 'น้องอะตอมยูงทอง😊');
     formattedResponse = formattedResponse.replace(/ค่ะ/g, 'ค่ะ✨');
-
-    // Add cultural references or slang if needed
-    /*if (Math.random() < 0.1) { // 30% chance to add a cultural reference
-        const phrases = ['สู้ๆ นะคะ', 'อย่าเพิ่งท้อน้า', 'เป็นกำลังใจให้ค่ะ'];
-        formattedResponse += ` ${phrases[Math.floor(Math.random() * phrases.length)]}`;
-    }*/
-
     return formattedResponse;
 }
 
+// Main chatbot function
 async function runChat(userInput, userId) {
     try {
-        console.log('[DEBUG] Calling Gemini API with:', userInput);
+        console.log('[DEBUG] Checking RAG method...');
+        
+        // Tokenize user input
+        const tokenizedInput = tokenizeThaiText(userInput);
+        console.log('[DEBUG] Tokenized Input:', tokenizedInput);
 
-        // Prepare the prompt without chat history
-        const prompt = `You are a female dog name "น้องอะตอมยูงทอง", a friendly and helpful bot for students at the Faculty of Science and Technology, Thammasat University. Your tone is formal yet approachable, and professional when needed. Your answer use concise Thai languages. Use emojis and polite cultural references to make interactions a bit more engaging.\nUser: ${userInput}\nBot:`;
+        const threshold = 0.60; // Define a similarity threshold
+        let bestMatch = null;
+        let highestScore = 0;
+
+        // Compare user input with questions in data.json
+        questionsData.forEach(entry => {
+            const tokenizedQuestion = tokenizeThaiText(entry.question);
+            const score = similarity.compareTwoStrings(tokenizedInput, tokenizedQuestion);
+            if (score > highestScore) {
+                highestScore = score;
+                bestMatch = entry;
+            }
+        });
+
+        if (highestScore >= threshold) {
+            console.log('[DEBUG] Match found in data.json with score:', highestScore);
+            return bestMatch.answer;
+        }
+
+        // Log the percentage similarity in terminal
+        console.log(`[DEBUG] No sufficient match found. Highest similarity score: ${(highestScore * 100).toFixed(2)}%`);
+
+        // Call Gemini API if no sufficient match
+        console.log('[DEBUG] Falling back to Gemini API...');
+        const prompt = `
+            You are a chatbot for the Faculty of Science and Technology, Thammasat University. 
+            Use concise Thai language with emojis and politeness. Answer the user's question based on the following info:
+            ${JSON.stringify(additionalInfo, null, 2)}
+            
+            User: ${userInput}
+            Bot:
+        `;
 
         const genAI = new GoogleGenerativeAI(API_KEY);
         const model = genAI.getGenerativeModel({ model: MODEL_NAME });
@@ -72,10 +98,9 @@ async function runChat(userInput, userId) {
         const response = await result.response;
         const botResponse = response.text();
 
-        // Format the bot response with persona-specific adjustments
         return formatBotResponse(botResponse, userId);
     } catch (error) {
-        console.error('[ERROR] Gemini API Error:', error);
+        console.error('[ERROR] Failed to process chat:', error);
         return "น้องอะตอมง่วงจังเลยค่ะ ไว้เจอกันคราวหลังนะคะ";
     }
 }
@@ -97,29 +122,22 @@ app.post('/webhook', (req, res) => {
 
 async function handleEvent(event) {
     try {
-        console.log('[DEBUG] Handling event:', event.replyToken);
-
         if (event.type !== 'message' || event.message.type !== 'text') {
             console.log('[DEBUG] Ignoring non-text message event');
             return Promise.resolve(null);
         }
 
         const userInput = event.message.text;
-        const userId = event.source.userId; // Get user ID for chat history
+        const userId = event.source.userId;
         console.log('[DEBUG] Received user input:', userInput);
 
         const botResponse = await runChat(userInput, userId);
         console.log('[DEBUG] Sending bot response:', botResponse);
 
-        // Send the response back to LINE
-        console.log('[DEBUG] Calling LINE API to reply');
-        const replyResult = await lineClient.replyMessage(event.replyToken, {
+        return await lineClient.replyMessage(event.replyToken, {
             type: 'text',
             text: botResponse
         });
-        console.log('[DEBUG] LINE API reply result:', replyResult);
-
-        return replyResult;
     } catch (error) {
         console.error('[ERROR] Event handling failed:', error.message);
         if (error.originalError) console.error('Details:', error.originalError.response.data);
@@ -133,7 +151,7 @@ app.use((err, req, res, next) => {
     res.status(500).send('Internal Server Error');
 });
 
-// Start Server
+// Start the server
 app.listen(port, () => {
     console.log(`Server running on port ${port}`);
 });

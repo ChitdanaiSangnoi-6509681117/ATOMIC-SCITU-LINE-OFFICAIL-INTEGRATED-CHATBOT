@@ -3,6 +3,8 @@
     "@google/generative-ai": "^0.21.0",
     "@line/bot-sdk": "^9.5.3",
     "dotenv": "^16.4.7",
-    "express": "^4.21.2"
+    "express": "^4.21.2",
+    "string-similarity": "^4.0.4",
+    "wordcut": "^0.9.1"
   }
 }
