@@ -1,3 +1,4 @@
+//Dependencies
 const express = require('express');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const line = require('@line/bot-sdk');
@@ -6,12 +7,13 @@ const fs = require('fs');
 const path = require('path');
 const similarity = require('string-similarity');
 const wordcut = require('wordcut');
+const { google } = require('googleapis');
 
-// Initialize wordcut for Thai tokenization
+//Start word cut for Thai Tokenizer
 wordcut.init();
 
 const app = express();
-const port = process.env.PORT || 3001; // Changed port to 3001
+const port = process.env.PORT || 3002;
 
 // Parse JSON request bodies
 app.use(express.json());
@@ -24,8 +26,8 @@ const lineConfig = {
 const lineClient = new line.Client(lineConfig);
 
 // Chatbot Configuration
-const MODEL_NAME = "gemini-1.5-flash-latest";
-const API_KEY = 'AIzaSyAKmKkNByBZAx8uMune4wloIR8ifvQ3zXg';
+const MODEL_NAME = "gemini-1.5-pro-latest";
+const API_KEY = 'AIzaSyDlm34wJxuQfU8IkP0Gs5q0IxpsP4rw6uY';
 
 // Load data.json
 const dataPath = path.join(__dirname, 'data/data.json');
@@ -37,9 +39,81 @@ const infoPath = path.join(__dirname, 'data/info.json');
 const rawInfo = fs.readFileSync(infoPath);
 const additionalInfo = JSON.parse(rawInfo);
 
+// Google Sheets Configuration
+const SPREADSHEET_ID = '1M4jg-iLpRobw22gSU7LI1l8PNnL2BAry6UiGXYKdUP8';
+const SHEET_NAME = 'Logs';
+const auth = new google.auth.GoogleAuth({
+    keyFile: path.join(__dirname, 'google/credentials.json'),
+    scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+});
+
+async function initializeGoogleSheets() {
+    const sheets = google.sheets({ version: 'v4', auth });
+    
+    try {
+        // Check if the sheet exists with correct range format
+        await sheets.spreadsheets.values.get({
+            spreadsheetId: SPREADSHEET_ID,
+            range: `${SHEET_NAME}!A1:C1`  // Changed from SHEET_NAME to specific range
+        });
+        console.log('[DEBUG] Sheet already exists');
+    } catch (error) {
+        if (error.code === 404 || error.message.includes('Unable to parse range')) {
+            console.log('[DEBUG] Creating new sheet');
+            try {
+                // Create the sheet if it doesn't exist
+                await sheets.spreadsheets.batchUpdate({
+                    spreadsheetId: SPREADSHEET_ID,
+                    resource: {
+                        requests: [{
+                            addSheet: {
+                                properties: {
+                                    title: SHEET_NAME,
+                                    gridProperties: {
+                                        rowCount: 1000,
+                                        columnCount: 3
+                                    }
+                                }
+                            }
+                        }]
+                    }
+                });
+                
+                // Add headers with correct range format
+                await sheets.spreadsheets.values.update({
+                    spreadsheetId: SPREADSHEET_ID,
+                    range: `${SHEET_NAME}!A1:D1`,
+                    valueInputOption: 'RAW',
+                    resource: {
+                        values: [['Timestamp', 'User Question', 'Bot Response','Response Type']]
+                    }
+                });
+                console.log('[DEBUG] Sheet created and headers added');
+            } catch (createError) {
+                if (createError.message.includes('Already exists')) {
+                    console.log('[DEBUG] Sheet already exists, proceeding with headers');
+                    // Try to update headers anyway
+                    await sheets.spreadsheets.values.update({
+                        spreadsheetId: SPREADSHEET_ID,
+                        range: `${SHEET_NAME}!A1:D1`,
+                        valueInputOption: 'RAW',
+                        resource: {
+                            values: [['Timestamp', 'User Question', 'Bot Response', 'Response Type']]
+                        }
+                    });
+                } else {
+                    throw createError;
+                }
+            }
+        } else {
+            throw error;
+        }
+    }
+}
+
 // Tokenization function for Thai text
 function tokenizeThaiText(text) {
-    return wordcut.cut(text); // Tokenize Thai text into spaced words
+    return wordcut.cut(text);
 }
 
 // Function to format bot response
@@ -49,6 +123,45 @@ function formatBotResponse(responseText, userId) {
     return formattedResponse;
 }
 
+// Function to append data to Google Sheet
+async function appendToGoogleSheet(timestamp, userQuestion, botResponse, responseType) {
+    try {
+        const sheets = google.sheets({ version: 'v4', auth });
+        
+        // Get the last row number
+        const response = await sheets.spreadsheets.values.get({
+            spreadsheetId: SPREADSHEET_ID,
+            range: `${SHEET_NAME}!A:A`
+        });
+        
+        const nextRow = (response.data.values?.length || 0) + 1;
+        
+        // Append data to the next row
+        await sheets.spreadsheets.values.update({
+            spreadsheetId: SPREADSHEET_ID,
+            range: `${SHEET_NAME}!A${nextRow}:D${nextRow}`,
+            valueInputOption: 'RAW',
+            resource: {
+                values: [[timestamp, userQuestion, botResponse, responseType]]
+            }
+        });
+        
+        console.log('[DEBUG] Data successfully appended to Google Sheet');
+    } catch (error) {
+        console.error('[ERROR] Failed to append data to Google Sheet:', error.message);
+        // Attempt to initialize the sheet if it doesn't exist
+        if (error.code === 404) {
+            try {
+                await initializeGoogleSheets();
+                // Retry appending data
+                await appendToGoogleSheet(timestamp, userQuestion, botResponse, responseType);
+            } catch (initError) {
+                console.error('[ERROR] Failed to initialize Google Sheet:', initError.message);
+            }
+        }
+    }
+}
+let responseType = "";
 // Main chatbot function
 async function runChat(userInput, userId) {
     try {
@@ -58,7 +171,7 @@ async function runChat(userInput, userId) {
         const tokenizedInput = tokenizeThaiText(userInput);
         console.log('[DEBUG] Tokenized Input:', tokenizedInput);
 
-        const threshold = 0.60; // Define a similarity threshold
+        const threshold = 0.60;
         let bestMatch = null;
         let highestScore = 0;
 
@@ -72,35 +185,44 @@ async function runChat(userInput, userId) {
             }
         });
 
+        let botResponse;
         if (highestScore >= threshold) {
             console.log('[DEBUG] Match found in data.json with score:', highestScore);
-            return bestMatch.answer;
+            botResponse = bestMatch.answer;
+            responseType = "RAG Method";
+        } else {
+            console.log(`[DEBUG] No sufficient match found. Highest similarity score: ${(highestScore * 100).toFixed(2)}%`);
+
+            console.log('[DEBUG] Falling back to Gemini API...');
+            const prompt = `
+                You are a chatbot for the Faculty of Science and Technology, Thammasat University. 
+                Use concise Thai language with emojis and politeness. Answer the user's question based on the following info:
+                ${JSON.stringify(additionalInfo, null, 2)}
+                
+                User: ${userInput}
+                Bot:
+            `;
+
+            const genAI = new GoogleGenerativeAI(API_KEY);
+            const model = genAI.getGenerativeModel({ model: MODEL_NAME });
+
+            const result = await model.generateContent(prompt);
+            const response = await result.response;
+            botResponse = response.text();
+            responseType = "Generative AI";
         }
 
-        // Log the percentage similarity in terminal
-        console.log(`[DEBUG] No sufficient match found. Highest similarity score: ${(highestScore * 100).toFixed(2)}%`);
+        // Format the bot response
+        const formattedResponse = formatBotResponse(botResponse, userId);
 
-        // Call Gemini API if no sufficient match
-        console.log('[DEBUG] Falling back to Gemini API...');
-        const prompt = `
-            You are a chatbot for the Faculty of Science and Technology, Thammasat University. 
-            Use concise Thai language with emojis and politeness. Answer the user's question based on the following info:
-            ${JSON.stringify(additionalInfo, null, 2)}
-            
-            User: ${userInput}
-            Bot:
-        `;
+        // Log the interaction to Google Sheets
+        const timestamp = new Date().toLocaleString('en-US', { timeZone: 'Asia/Bangkok' });
+        await appendToGoogleSheet(timestamp, userInput, formattedResponse, responseType);
 
-        const genAI = new GoogleGenerativeAI(API_KEY);
-        const model = genAI.getGenerativeModel({ model: MODEL_NAME });
-
-        const result = await model.generateContent(prompt);
-        const response = await result.response;
-        const botResponse = response.text();
-
-        return formatBotResponse(botResponse, userId);
+        return formattedResponse;
     } catch (error) {
         console.error('[ERROR] Failed to process chat:', error);
+        responseType = "Fallback";
         return "น้องอะตอมง่วงจังเลยค่ะ ไว้เจอกันคราวหลังนะคะ";
     }
 }
@@ -151,7 +273,13 @@ app.use((err, req, res, next) => {
     res.status(500).send('Internal Server Error');
 });
 
-// Start the server
-app.listen(port, () => {
+// Start the server with Google Sheets initialization
+app.listen(port, async () => {
     console.log(`Server running on port ${port}`);
+    try {
+        await initializeGoogleSheets();
+        console.log('Google Sheets integration initialized successfully');
+    } catch (error) {
+        console.error('Failed to initialize Google Sheets:', error.message);
+    }
 });
