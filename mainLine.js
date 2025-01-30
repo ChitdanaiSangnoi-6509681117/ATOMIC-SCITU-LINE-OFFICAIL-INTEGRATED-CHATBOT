@@ -26,7 +26,7 @@ const lineConfig = {
 const lineClient = new line.Client(lineConfig);
 
 // Chatbot Configuration
-const MODEL_NAME = "gemini-1.5-pro-latest";
+const MODEL_NAME = "gemini-1.5-flash-latest";
 const API_KEY = 'AIzaSyDlm34wJxuQfU8IkP0Gs5q0IxpsP4rw6uY';
 
 // Load data.json
@@ -195,8 +195,9 @@ async function runChat(userInput, userId) {
 
             console.log('[DEBUG] Falling back to Gemini API...');
             const prompt = `
-                You are a chatbot for the Faculty of Science and Technology, Thammasat University. 
-                Use concise Thai language with emojis and politeness. Answer the user's question based on the following info:
+                You are a chatbot, a hybrid of dog and cat for the Faculty of Science and Technology named "อะตอมยูงทอง", Thammasat University. 
+                Use concise Thai language with emojis and politeness. Answer the user's question based on the following info (you don't have to say
+                "สวัสดีค่ะ" unless they greets you first):
                 ${JSON.stringify(additionalInfo, null, 2)}
                 
                 User: ${userInput}
