@@ -8,18 +8,8 @@ const fs = require('fs');
 const similarity = require('string-similarity');
 const wordcut = require('wordcut');
 const { google } = require('googleapis');
-const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
-const { DynamoDBDocumentClient, PutCommand } = require('@aws-sdk/lib-dynamodb');
 const { time } = require('console');
-
-
-const dynamoDBClient = new DynamoDBClient({ region: 'ap-southeast-2' });
-const docClient = DynamoDBDocumentClient.from(dynamoDBClient);
 const port = process.env.PORT || 3002; // Fallback to 3000 if PORT is not set
-const awsAccessKeyId = process.env.AWS_ACCESS_KEY_ID;
-const awsSecretAccessKey = process.env.AWS_SECRET_ACCESS_KEY;
-const awsRegion = process.env.AWS_REGION;
-
 console.log('PORT:', process.env.PORT);
 console.log('LINE_ACCESS_TOKEN:', process.env.LINE_ACCESS_TOKEN);
 console.log('LINE_SECRET_TOKEN:', process.env.LINE_SECRET_TOKEN);
@@ -145,27 +135,6 @@ function storeConversation(userId, userInput, botResponse) {
     }
 }
 
-async function saveToDynamoDB(userID, timestamp, userQuestion, botResponse, responseType){
-    const param = {
-        TableName: 'BotInteraction',
-        Item:{
-            USERID: userID,
-            TIMESTAMP: timestamp,
-            USERQUESTION: userQuestion,
-            BOTRESPONSE: botResponse,
-            RESPONSETYPE: responseType
-
-        }
-    };
-
-    try {
-        await docClient.send(new PutCommand(param));
-        console.log('[DEBUG] Data saved to DynamoDB');
-    }catch(error){
-        console.error('[ERROR] Failed to save to DynamoDB:', error);
-    }
-}
-
 // Tokenization function for Thai text
 function tokenizeThaiText(text) {
     return wordcut.cut(text);
@@ -288,8 +257,6 @@ async function runChat(userInput, userId) {
         // Log the interaction to Google Sheets
         const timestamp = new Date().toLocaleString('en-US', { timeZone: 'Asia/Bangkok' });
         await appendToGoogleSheet(timestamp, userInput, formattedResponse, responseType);
-
-        //await saveToDynamoDB(userId, timestamp, userInput, formattedResponse, responseType);
 
         return formattedResponse;
     } catch (error) {
