@@ -10,13 +10,6 @@ const wordcut = require('wordcut');
 const { google } = require('googleapis');
 const { time } = require('console');
 const port = process.env.PORT || 3002; // Fallback to 3000 if PORT is not set
-console.log('PORT:', process.env.PORT);
-console.log('LINE_ACCESS_TOKEN:', process.env.LINE_ACCESS_TOKEN);
-console.log('LINE_SECRET_TOKEN:', process.env.LINE_SECRET_TOKEN);
-console.log('GOOGLE_API_KEY:', process.env.GOOGLE_API_KEY);
-console.log('AWS_ACCESS_KEY_ID:', process.env.AWS_ACCESS_KEY);
-console.log('AWS_SECRET_ACCESS_KEY:', process.env.AWS_SECRET_KEY);
-console.log('AWS_REGION:', process.env.AWS_REGION);
 
 //Start word cut for Thai Tokenizer
 wordcut.init();
@@ -48,8 +41,8 @@ const rawInfo = fs.readFileSync(infoPath);
 const additionalInfo = JSON.parse(rawInfo);
 
 // Google Sheets Configuration
-const SPREADSHEET_ID = '1M4jg-iLpRobw22gSU7LI1l8PNnL2BAry6UiGXYKdUP8';
-const SHEET_NAME = 'Logs';
+const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
+const SHEET_NAME = process.env.SHEET_NAME;
 const auth = new google.auth.GoogleAuth({
     keyFile: path.join(__dirname, 'google/credentials.json'),
     scopes: ['https://www.googleapis.com/auth/spreadsheets'],
