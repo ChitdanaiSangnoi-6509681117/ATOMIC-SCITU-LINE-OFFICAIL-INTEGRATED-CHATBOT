@@ -2,32 +2,50 @@
 const express = require('express');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const line = require('@line/bot-sdk');
-const dotenv = require('dotenv').config();
-const fs = require('fs');
 const path = require('path');
+require('dotenv-flow').config();;
+const fs = require('fs');
 const similarity = require('string-similarity');
 const wordcut = require('wordcut');
 const { google } = require('googleapis');
+const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
+const { DynamoDBDocumentClient, PutCommand } = require('@aws-sdk/lib-dynamodb');
+const { time } = require('console');
+
+
+const dynamoDBClient = new DynamoDBClient({ region: 'ap-southeast-2' });
+const docClient = DynamoDBDocumentClient.from(dynamoDBClient);
+const port = process.env.PORT || 3002; // Fallback to 3000 if PORT is not set
+const awsAccessKeyId = process.env.AWS_ACCESS_KEY_ID;
+const awsSecretAccessKey = process.env.AWS_SECRET_ACCESS_KEY;
+const awsRegion = process.env.AWS_REGION;
+
+console.log('PORT:', process.env.PORT);
+console.log('LINE_ACCESS_TOKEN:', process.env.LINE_ACCESS_TOKEN);
+console.log('LINE_SECRET_TOKEN:', process.env.LINE_SECRET_TOKEN);
+console.log('GOOGLE_API_KEY:', process.env.GOOGLE_API_KEY);
+console.log('AWS_ACCESS_KEY_ID:', process.env.AWS_ACCESS_KEY);
+console.log('AWS_SECRET_ACCESS_KEY:', process.env.AWS_SECRET_KEY);
+console.log('AWS_REGION:', process.env.AWS_REGION);
 
 //Start word cut for Thai Tokenizer
 wordcut.init();
 
 const app = express();
-const port = process.env.PORT || 3002;
 
 // Parse JSON request bodies
 app.use(express.json());
 
 // LINE Messaging API configuration
 const lineConfig = {
-    channelAccessToken: 'OdrvozLDBJZqEhxrqLC0UXBEVWVMm2mgAfdSU9JTxyi7ZQSVCKaXfGKZOHJYddTtISzpkTHblPr0wcvkLmB0EGvKLeXo9N8FtnF69Tm/zcSQ0JS2J4tkvVCo+DXUKPfssG0mhA1I56BFKChrg2NRBgdB04t89/1O/w1cDnyilFU=',
-    channelSecret: '8ff5f11991be728f63d5f91bd4b56bbf',
+    channelAccessToken: process.env.LINE_ACCESS_TOKEN,
+    channelSecret: process.env.LINE_SECRET_TOKEN,
 };
 const lineClient = new line.Client(lineConfig);
 
 // Chatbot Configuration
 const MODEL_NAME = "gemini-1.5-flash-latest";
-const API_KEY = 'AIzaSyDlm34wJxuQfU8IkP0Gs5q0IxpsP4rw6uY';
+const API_KEY = process.env.GOOGLE_API_KEY;
 
 // Load data.json
 const dataPath = path.join(__dirname, 'data/data.json');
@@ -111,6 +129,43 @@ async function initializeGoogleSheets() {
     }
 }
 
+// In-memory storage for conversation history
+const conversationHistory = {};
+
+// Function to store conversation history
+function storeConversation(userId, userInput, botResponse) {
+    if (!conversationHistory[userId]) {
+        conversationHistory[userId] = [];
+    }
+    conversationHistory[userId].push({ userInput, botResponse });
+
+    // Keep only the last 3 conversations
+    if (conversationHistory[userId].length > 3) {
+        conversationHistory[userId].shift();
+    }
+}
+
+async function saveToDynamoDB(userID, timestamp, userQuestion, botResponse, responseType){
+    const param = {
+        TableName: 'BotInteraction',
+        Item:{
+            USERID: userID,
+            TIMESTAMP: timestamp,
+            USERQUESTION: userQuestion,
+            BOTRESPONSE: botResponse,
+            RESPONSETYPE: responseType
+
+        }
+    };
+
+    try {
+        await docClient.send(new PutCommand(param));
+        console.log('[DEBUG] Data saved to DynamoDB');
+    }catch(error){
+        console.error('[ERROR] Failed to save to DynamoDB:', error);
+    }
+}
+
 // Tokenization function for Thai text
 function tokenizeThaiText(text) {
     return wordcut.cut(text);
@@ -161,7 +216,7 @@ async function appendToGoogleSheet(timestamp, userQuestion, botResponse, respons
         }
     }
 }
-let responseType = "";
+
 // Main chatbot function
 async function runChat(userInput, userId) {
     try {
@@ -194,13 +249,23 @@ async function runChat(userInput, userId) {
             console.log(`[DEBUG] No sufficient match found. Highest similarity score: ${(highestScore * 100).toFixed(2)}%`);
 
             console.log('[DEBUG] Falling back to Gemini API...');
+            
+            // Get the last 3 conversations
+            const recentConversations = conversationHistory[userId] || [];
+            const conversationContext = recentConversations.map(conv => 
+                `User: ${conv.userInput}\nBot: ${conv.botResponse}`
+            ).join('\n');
+
             const prompt = `
-                You are a chatbot, a hybrid of dog and cat for the Faculty of Science and Technology named "อะตอมยูงทอง", Thammasat University. 
+                You are a female chatbot, an offsprings of dog and cat for the Faculty of Science and Technology named "อะตอมยูงทอง", Thammasat University. 
                 Use concise Thai language with emojis and politeness. Answer the user's question based on the following info (you don't have to say
                 "สวัสดีค่ะ" unless they greets you first):
                 ${JSON.stringify(additionalInfo, null, 2)}
                 
-                User: ${userInput}
+                Your recent conversation with this user:
+                ${conversationContext}
+                
+                Current User Question: ${userInput}
                 Bot:
             `;
 
@@ -208,6 +273,7 @@ async function runChat(userInput, userId) {
             const model = genAI.getGenerativeModel({ model: MODEL_NAME });
 
             const result = await model.generateContent(prompt);
+            console.log(prompt);
             const response = await result.response;
             botResponse = response.text();
             responseType = "Generative AI";
@@ -216,9 +282,14 @@ async function runChat(userInput, userId) {
         // Format the bot response
         const formattedResponse = formatBotResponse(botResponse, userId);
 
+        // Store the conversation
+        storeConversation(userId, userInput, formattedResponse);
+
         // Log the interaction to Google Sheets
         const timestamp = new Date().toLocaleString('en-US', { timeZone: 'Asia/Bangkok' });
         await appendToGoogleSheet(timestamp, userInput, formattedResponse, responseType);
+
+        //await saveToDynamoDB(userId, timestamp, userInput, formattedResponse, responseType);
 
         return formattedResponse;
     } catch (error) {
