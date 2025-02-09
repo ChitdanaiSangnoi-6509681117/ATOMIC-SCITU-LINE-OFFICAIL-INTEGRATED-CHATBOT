@@ -235,7 +235,6 @@ async function runChat(userInput, userId) {
             const model = genAI.getGenerativeModel({ model: MODEL_NAME });
 
             const result = await model.generateContent(prompt);
-            console.log(prompt);
             const response = await result.response;
             botResponse = response.text();
             responseType = "Generative AI";
