@@ -44,7 +44,7 @@ const additionalInfo = JSON.parse(rawInfo);
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
 const SHEET_NAME = "Logs";
 const auth = new google.auth.GoogleAuth({
-    keyFile: path.join(__dirname, '/etc/secrets/credentials.json'),
+    keyFile: path.join(__dirname, 'credentials.json'),
     scopes: ['https://www.googleapis.com/auth/spreadsheets'],
 });
 
