@@ -42,7 +42,7 @@ const additionalInfo = JSON.parse(rawInfo);
 
 // Google Sheets Configuration
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
-const SHEET_NAME = process.env.SHEET_NAME;
+const SHEET_NAME = "Logs";
 const auth = new google.auth.GoogleAuth({
     keyFile: path.join(__dirname, 'google/credentials.json'),
     scopes: ['https://www.googleapis.com/auth/spreadsheets'],
@@ -188,7 +188,7 @@ async function runChat(userInput, userId) {
         const tokenizedInput = tokenizeThaiText(userInput);
         console.log('[DEBUG] Tokenized Input:', tokenizedInput);
 
-        const threshold = 0.60;
+        const threshold = 0.65;
         let bestMatch = null;
         let highestScore = 0;
 
