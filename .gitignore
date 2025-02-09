@@ -60,3 +60,4 @@ coverage/
 *.orig
 
 # Ignore any custom data
+google/
